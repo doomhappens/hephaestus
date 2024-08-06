@@ -26,6 +26,7 @@ Run without CMake:
 ```
 
 # TODO:
+- [ ] Fix the Makefile lol
 - [ ] Paralelize (if possible) tensorial operations and CORDIC implementations. [hephaestus/HTensor.h](hephaestus/HTensor.h)
 - [ ] Rewrite foreach function and create Itreable interface
 - [ ] Add large ranging functions for CORDIC
