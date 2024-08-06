@@ -7,11 +7,13 @@ Hephaestus can be built with CMake.
 Requirements:
 - CMake extensions (VScode)
 - g++ and gcc compilers
+## Use para4 as ouptut!
 
 Run without CMake:
 ```bash
     make # or
-    g++ -std=c++17 -stdlib=libc++ main.cpp --include athena/*.cpp hephaestus/*.cpp
+    g++-11 -std=c++17  -fopenmp main.cpp --include athena/*.cpp hephaestus/*.cpp -o para4 -fpermissive
+    # not this g++ -std=c++17 -stdlib=libc++ main.cpp --include athena/*.cpp hephaestus/*.cpp
 ```
 
 # Structure
@@ -24,6 +26,7 @@ Run without CMake:
 ```
 
 # TODO:
+- [ ] Fix the Makefile lol
 - [ ] Paralelize (if possible) tensorial operations and CORDIC implementations. [hephaestus/HTensor.h](hephaestus/HTensor.h)
 - [ ] Rewrite foreach function and create Itreable interface
 - [ ] Add large ranging functions for CORDIC

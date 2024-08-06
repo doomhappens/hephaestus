@@ -7,9 +7,14 @@
 
 #ifndef HTENSORS_H
 #define HTENSORS_H
+#define USE_IDENTITY_METRIC
+#define PARALELIZ_W_OMP
+#define PARALELIZ_W_OMP2
 
 #include "Greek.h"
+#include "vproxy.h"
 #include <vector>
+#include "omp.h"
 
 inline bool HTENS_COUT_DEPTH_DIM = false;
 
@@ -145,7 +150,7 @@ class HTensor{
         //         return this[first][_position];
         //     }
         // }
-        HTensor<T> operator[] (std::vector<int> _position){
+        HTensor<T> operator[] (std::vector<int>& _position){
             HTensor<T> __buff = (*this);
 
             // #para
@@ -267,34 +272,44 @@ class HTensor{
         //     }
         // }
 
-        static HTensor<T> tensor_product(HTensor<T> __X, HTensor<T> __Y){
-            std::vector<int> __prodshape_vec = __X.measures();
+        static HTensor<T> tensor_product(const HTensor<T>& __X, const HTensor<T>& __Y){
             std::vector<int> __Xshape_vec = __X.measures();
             std::vector<int> __Yshape_vec = __Y.measures();
+            std::vector<int> __prodshape_vec = __X.measures();
+
             for(int yit = 0; yit < __Yshape_vec.size(); ++yit){
                 __prodshape_vec.push_back(__Yshape_vec.at(yit));
             }
 
             HShape __prodshape(__prodshape_vec);
-            std::vector<T> _repl, _donc;
+            std::vector<T> _repl(__prodshape.signature(), (T)0), _donc(__prodshape.signature(), (T)0);
             
-            // #para
-            for(int i=0; i< __prodshape.signature(); ++i){
-                _repl.push_back( (T)(0) );
-            }
+            
 
             HTensor<T> __buff(_repl, __prodshape);
             int __XDIM = __X.dim(), __YDIM = __Y.dim();
-            std::vector<int> __m = __buff.measures();
+            std::vector<int> buffer_measures = __buff.measures();
             //std::cout<<"\n"<<__buff<<"\n";
+            // TODO: Fix with reduce
+            // TODO: This is redundant when used with parralelized reduce function!
+            // TODO: Make better alternative that uses reduce
+            std::vector< std::vector<int> > cds_for_index(__prodshape.signature());
+            #pragma omp parallel for num_threads(200)
+            for (int i = 0; i < __prodshape.signature(); ++i) {
+                // std::cout << "i : "<<i<<"\n";
+                cds_for_index.at(i) = __buff.coords_forindex(i , buffer_measures);;
+            }
+
+            #pragma omp parallel for num_threads(120)
             for(int i=0; i< __prodshape.signature(); ++i){
-                std::vector<int> __coords_ofi = __buff.coords_forindex(i , __m);
+                std::vector<int> __coords_ofi = cds_for_index.at(i);
                 std::vector<int> __Xcds, __Ycds;
+                // maybe?
                 for(int _j = 0; _j < __XDIM; ++ _j)
                     __Xcds.push_back(__coords_ofi.at(_j));
                 for(int _j = 0; _j < __YDIM; ++ _j)
                     __Ycds.push_back(__coords_ofi.at(__XDIM + _j));
-                _donc.push_back( __X[__Xcds].val() * __Y[__Ycds].val() );
+                _donc.at(i) = ( __X[__Xcds].val() * __Y[__Ycds].val() );
             }
             HTensor<T> __ret(_donc, __prodshape);
             return __ret;
@@ -354,6 +369,39 @@ class HEinsteinNotation{
         return _h;
     }
 
+    // #
+    HEinsteinNotation fit_index_to_index(HEinsteinNotation t1, HEinsteinNotation t2, size_t to_fix_ind, size_t to_index_ind){
+        // #TODOIMP
+
+    }
+
+    static std::pair<HEinsteinNotation, HEinsteinNotation>
+    fix_index_to_index(HEinsteinNotation t1, size_t to_fix_ind,
+                        HEinsteinNotation t2, size_t to_index_ind) {
+
+        HShape shape1 = HShape(t1.tensor.measures()); 
+        HShape shape2 = HShape(t2.tensor.measures());   
+        std::vector<bool> is_up_1 = t1.is_up;
+        std::vector<bool> is_up_2 = t2.is_up;
+        std::vector<std::string> indices_of_new_1 = t1.indices;
+        std::vector<std::string> indices_of_new_2 = t2.indices;
+        deleteAll_vek(is_up_1, {(int)to_fix_ind});
+        deleteAll_vek(indices_of_new_1, {(int)to_fix_ind});
+        deleteAll_vek(is_up_2, {(int)to_index_ind});
+        deleteAll_vek(indices_of_new_2, {(int)to_index_ind});
+        std::vector<int> vek_tensorshape_1 = shape1.axi_ilen;
+        std::vector<int> vek_tensorshape_2 = shape2.axi_ilen;
+        int size_of_contracted_dim = -1;
+        if(vek_tensorshape_1.at(to_fix_ind) != vek_tensorshape_2.at(to_index_ind))
+            throw std::invalid_argument("Cannot contract non-symmetric portions of tensor!");
+        else
+            size_of_contracted_dim = vek_tensorshape_1.at(to_fix_ind);
+        deleteAll_vek(vek_tensorshape_1, {(int)to_fix_ind});
+        deleteAll_vek(vek_tensorshape_2, {(int)to_index_ind});
+
+
+    }
+
     HEinsteinNotation fix_index_to_index(size_t to_fix_ind, size_t to_index_ind){
        
         HShape tensor_shape = HShape(tensor.measures());
@@ -375,19 +423,39 @@ class HEinsteinNotation{
 
         deleteAll_vek(vek_tensorshape, {(int)to_fix_ind, (int)to_index_ind});
 
-        std::vector<T> vals_for_res;
-        for(int i=0; i<HShape(vek_tensorshape).signature(); ++i){
-            vals_for_res.push_back( (T)(0) );
-        }
+        std::vector<T> vals_for_res(HShape(vek_tensorshape).signature(), (T)0);
+    
 
         HTensor<T> _res_tensor(vals_for_res, HShape(vek_tensorshape) );
-        //std::cout<<"deleteAll_vek"<<"\n";//debug
 
         // #para?
+                std::cout<<"befor : () " << HShape(vek_tensorshape).signature()<<std::endl;
+
+        #ifndef PARALELIZ_W_OMP2
+        std::vector<int> coords_in_res = std::vector<int>(vek_tensorshape.size(), 0);
+        coords_in_res.at(coords_in_res.size() - 1) = -1;
+        std::cout<<"VEKTENSSHAPE: "<<HShape(vek_tensorshape).signature()<<"\n";
+        #endif
+        #ifdef PARALELIZ_W_OMP2
+        #pragma omp parallel for num_threads(120)
+        #endif
         for(int i=0; i<HShape(vek_tensorshape).signature(); ++i){
-            // TODO: Replace this line with simply increment (I don't know what i was thinking)
+            #ifdef PARALELIZ_W_OMP2
+            int tid1 = omp_get_thread_num();
             std::vector<int> coords_in_res = _res_tensor.coords_forindex(i, vek_tensorshape);
 
+            #endif
+
+            #ifndef PARALELIZ_W_OMP2
+            
+            int vend = vek_tensorshape.size() - 1;
+            while(coords_in_res.at(vend) >= vek_tensorshape.at(vend) - 1 && vend >= 0) {
+                coords_in_res.at(vend) = 0;
+                vend --;
+            }
+            if (vend >= 0)
+                coords_in_res.at(vend) ++;
+            #endif
 
             std::vector<int> coords_in_old = coords_in_res;
 
@@ -404,21 +472,27 @@ class HEinsteinNotation{
                 coords_in_old.push_back(0), to_index_ind = coords_in_old.size() - 1;
             else
                 coords_in_old.insert(coords_in_old.begin() + to_index_ind, 0);
+            
+            if(_res_tensor.at(coords_in_res).val() == (T)(0)) {
+                T reduction_sum = 0;
 
-            if(_res_tensor.at(coords_in_res).val() == (T)(0))
+                #ifdef PARALELIZ_W_OMP
+                /**
+                 * Define reduction for template
+                */
+                #pragma omp declare reduction                                   \
+                    (rwzt:T:omp_out=omp_out + omp_in)
+                #pragma omp parallel for reduction(rwzt:reduction_sum) num_threads(60)
+                #endif
+                for(int _si = 0; _si<size_of_contracted_dim; ++_si){
+                    auto cds_cpy = coords_in_old;
 
-            // #para , clearly:)
-            for(int _si = 0; _si<size_of_contracted_dim; ++_si){
+                    cds_cpy.at(to_fix_ind) = _si;
+                    cds_cpy.at(to_index_ind) = _si;
 
-                coords_in_old.at(to_fix_ind) = _si;
-
-                coords_in_old.at(to_index_ind) = _si;
-
-                // ref
-                T _thisval = (*this).at(coords_in_old);
-                HTensor<T> _aux = HTensor<T>(_res_tensor.at(coords_in_res).val() + (*this).at(coords_in_old));
-                // ref
-                _res_tensor.at(coords_in_res) = _aux;
+                    reduction_sum = reduction_sum + (*this).tensor.at(cds_cpy).val();
+                }
+                _res_tensor.at(coords_in_res) = HTensor<T>(reduction_sum);
             }
         }
         return HEinsteinNotation(_res_tensor, indices_of_new, is_up_);
@@ -445,7 +519,6 @@ class HEinsteinNotation{
             }
             
         }
-
         if(sw == 0) return tens_en;
         int qi=-1, qj=-1;
         // #para
@@ -458,45 +531,92 @@ class HEinsteinNotation{
             }
         }
 
-        //std::cout<<qi<<" "<<qj<<'\n'; // debug
+        std::cout<<qi<<" qij "<<qj<<std::endl; // debug
 
         return HEinsteinNotation::reduce( tens_en.fix_index_to_index(qi, qj) );
 
     }
+
+
+    //TODOIMP
+    static HEinsteinNotation reduce(HEinsteinNotation r_tens_en, HEinsteinNotation l_tens_en){
+        int sw=0;
+        // #para
+        for(int i=0; i < r_tens_en.indices.size(); ++i){
+            for(int j=0; j < l_tens_en.indices.size(); ++j){
+                if(r_tens_en.is_up.at(i) && !l_tens_en.is_up.at(j) &&
+                    r_tens_en.indices.at(i) == l_tens_en.indices.at(j)){
+                    sw=1;
+                }
+            }
+            
+        }
+        if(sw == 0) return l_tens_en;
+        int qi=-1, qj=-1;
+        // #para
+        for(int i=0; i < r_tens_en.indices.size(); ++i){
+            for(int j=0; j < l_tens_en.indices.size(); ++j){
+                if(r_tens_en.is_up.at(i) && !l_tens_en.is_up.at(j) &&
+                    r_tens_en.indices.at(i) == l_tens_en.indices.at(j)){
+                    qi = i;
+                    qj = j;
+                }
+            }
+        }
+
+        std::cout<<qi<<" qij "<<qj<<std::endl; // debug
+        // #TODOIMP
+        return; //HEinsteinNotation::reduce( tens_en.fix_index_to_index(qi, qj) );
+
+    }
+
     static HEinsteinNotation to_upper(HEinsteinNotation entens, std::vector<int>& indices_to_lower){
         indices_to_lower = {};
 
         // #para
         for(int i=0; i<entens.indices.size(); ++i){
             if(!entens.is_up.at(i)){
-                entens.raise_index( entens.indices.at(i) , entens.indices.at(i));
+                //std::cout<<entens.is_up.at(i)<<" up?"<<std::endl;
+                entens = entens.raise_index( entens.indices.at(i) , entens.indices.at(i));
                 indices_to_lower.push_back(i);
+               // std::cout<<entens.is_up.at(i)<<" st?"<<std::endl;
+
             }
         }
         return entens;
     }
     
-    
-    static T value_at_gd( HEinsteinNotation entens, std::vector<int> corresp_coord, std::vector<int> ms){
+    // this is very slow.
+    // TODO: Fix
+    static T value_at_gd( HEinsteinNotation entens, const std::vector<int>& corresp_coord, const std::vector<int>& ms){
+        #ifdef USE_IDENTITY_METRIC
+            return entens.tensor.at(corresp_coord).val();
+        #endif
+        
         std::vector<int> indices_to_lwr = {};
 
         HEinsteinNotation uppd = HEinsteinNotation::to_upper(entens, indices_to_lwr);
 
-        if(indices_to_lwr.size() == 0) return entens.tensor.at(corresp_coord).val();
+        if(indices_to_lwr.size() == 0) 
+            return entens.tensor.at(corresp_coord).val();
         T val = 0;
-
+        //std::cout<<indices_to_lwr.size()<<std::endl;
         // #para - recursive fork +- finish
         for(int i=0; i<indices_to_lwr.size(); ++i){
             int index_to_lwr = indices_to_lwr.at(i);
             std::string index_name = entens.indices.at(index_to_lwr);
 
             int cc_ind = corresp_coord.at(index_to_lwr);
+
+            /*#pragma omp declare reduction                                   \
+                    (rwzt:T:omp_out=omp_out + omp_in)
+            #pragma omp parallel for reduction(rwzt:val) num_threads(60)*/
             for(int di = 0; di<ms.at(index_to_lwr); ++di){
                 HEinsteinNotation _raisedone = entens.raise_index(index_name, index_name);
                 std::vector<int> cc = corresp_coord;
                 cc.at(index_to_lwr) = di;
-
-                val = val + (T)(METRIC_LAMBDA(cc_ind, cc.at(index_to_lwr))) * HEinsteinNotation::value_at_gd(_raisedone, cc, ms);
+             //   if ((T)(METRIC_LAMBDA(cc_ind, cc.at(index_to_lwr))) != (T)0)
+                    val = val + (T)(METRIC_LAMBDA(cc_ind, cc.at(index_to_lwr))) * HEinsteinNotation::value_at_gd(_raisedone, cc, ms);
             }
             return val;
         }
@@ -530,8 +650,8 @@ class HEinsteinNotation{
     }
 
     static HEinsteinNotation tens_multiply(HEinsteinNotation lhs, HEinsteinNotation rhs){
+        // TODO:    MAKE REDUCTION FUNCTION FOR LHS, RHS instead of single one
         HEinsteinNotation tprod = HEinsteinNotation::tens_product(lhs, rhs);
-        //std::cout<<"DONEE\n";
         return HEinsteinNotation::reduce(tprod);
     }
 
